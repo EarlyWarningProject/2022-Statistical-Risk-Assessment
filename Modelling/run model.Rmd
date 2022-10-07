@@ -1,0 +1,163 @@
+---
+title: "SRA 2021-based"
+author: "Julia Levine, Chad Hazlett"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output: 
+  pdf_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(glmnet)
+library(data.table)
+library(ggplot2)
+library(knitr)
+base_years <- c("2021")
+```
+
+# Run Model
+
+```{r}
+
+outcomenames <- c("anymk.start.1", "anymk.start.2window")
+
+# Note change to anymk.ongoing and anymk.ever (from mkl.ongoing and mkl.ever)
+predictornames <- c("anymk.ongoing","anymk.ever",
+                    "reg.afr", "reg.eap", "reg.eur", "reg.mna", "reg.sca", 
+                    "countryage.ln", "popsize.ln.combined", "imr.sqrt", 
+                    "gdppcgrowth.combined", "ios.iccpr1","includesnonstate",
+                    "minorityrule", "elf.ethnic", "battledeaths.ln",
+                    "candidaterestriction", "partyban","judicialreform",
+                    "religiousfreedom", "pol_killing_approved",
+                    "freemove_men4","freemove_women4", "freediscussion",
+                    "social_inequality","even_civilrights","repress_civilsoc",
+                    "social_power_dist", "ses_power_dist","tradeshare.ln.combined",
+                    "coup.try.5yr")
+```
+
+
+
+```{r}
+source("functions_used/create_datasets.R")
+source("functions_used/run_model.R")
+source("functions_used/format_results.R")
+```
+
+
+
+```{r, eval = FALSE}
+
+dat.files <- list.files("../Make data/output/")[grepl("prepared", list.files("../Make data/output/"))]
+latest.pull <- which.max(lapply(dat.files, 
+                                function(x) {
+                                  as.Date(gsub(paste0(paste0("prepared", base_years, "predictors-"), "|.csv"), "", x))}))
+dat <- fread(paste0("../Make data/output/", dat.files[latest.pull]))
+
+# run the model and save the output
+
+results <- lapply(base_years, 
+                  function(x) format_results(dat = dat, base_year = x))
+names(results) <- paste0("base", base_years)
+list2env(results, .GlobalEnv)
+
+
+for(i in 1:length(results)){
+  write.csv(results[[i]][1], paste("results/", names(results)[i], "-run-", 
+                       Sys.Date(),".csv" , sep = ""), 
+            row.names = FALSE)
+}
+
+for(i in 1:length(results)){
+  write.csv(results[[i]][2], paste("results/", names(results)[i], "-coeffs-run-", 
+                       Sys.Date(),".csv" , sep = ""), 
+            row.names = FALSE)
+}
+
+for(i in 1:length(results)){
+    cv.glmnet <- results[[i]][[3]]
+  save(cv.glmnet, predictornames, file=paste("results/", names(results)[i], "-cv.glmnet-", 
+                       Sys.Date(),".Rdata" , sep = ""))
+}
+
+
+```
+
+# Results
+
+```{r, echo = F}
+dat.files <- list.files("results")[grepl(paste0("base", base_years, "-run-"), list.files("results"))]
+latest.pull <- which.max(lapply(dat.files, 
+                                function(x) {
+                                  as.Date(gsub(paste0(paste0("base", base_years, "-run-"), "|.csv"), "", x))}))
+risk_new <- fread(paste0("results/", dat.files[latest.pull]))
+
+risk_new <- risk_new[, c(1, 4:5)]
+colnames(risk_new)[2:3] <- c("risk_1yr", "risk_2yr")
+setorder(risk_new, -risk_2yr)
+```
+
+
+<!-- ```{r} -->
+<!-- risk_new_error <- fread(paste0("results/", dat.files[1])) -->
+
+<!-- risk_new_error <- risk_new_error[, c(1, 4:5)] -->
+<!-- colnames(risk_new_error)[2:3] <- c("risk_1yr", "risk_2yr") -->
+<!-- setorder(risk_new_error, -risk_2yr) -->
+<!-- risk_new_error[, old_rank := 1:.N] -->
+<!-- risk_new[, new_rank := 1:.N] -->
+
+<!-- comp = risk_new[risk_new_error, on = .(country)] -->
+<!-- comp[, .(country, new_rank, old_rank)] -->
+<!-- # [order(new_rank)] -->
+<!-- ``` -->
+
+
+
+
+```{r, echo = F}
+# Compare to last year
+
+dir = paste0("../../", base_years, "SRA/Modelling/results/")
+dat.files <- list.files(dir)[grepl(paste0("base", as.integer(base_years)-1, "-run-"), list.files(dir))]
+latest.pull <- which.max(lapply(dat.files, 
+                                function(x) {
+                                  as.Date(gsub(paste0(paste0("base", as.integer(base_years)-1, "-run-"), "|.csv"), "", x))}))
+risk_old <- fread(paste0(dir, dat.files[latest.pull]))
+
+# risk_old <- fread("../previous years/base2019-run-2020-08-18.csv")
+risk_old <- risk_old[, c(1, 4:5)]
+colnames(risk_old)[2:3] <- c("risk_1yr", "risk_2yr")
+risk_old[, base := as.integer(base_years)-1]
+risk_new[, base := as.integer(base_years)]
+
+comp <- rbind(risk_new, risk_old)
+setorder(comp, -risk_2yr)
+comp[, rank := 1:.N, by = base]
+comp[, new_rank := rank[base == as.integer(base_years)], by = country]
+comp[, new_2yrrisk := risk_2yr[base == as.integer(base_years)], by = country]
+comp[, new_1yrrisk := risk_1yr[base == as.integer(base_years)], by = country]
+setorder(comp, new_rank)
+
+comp[, country := factor(country, levels = unique(comp$country))]
+```
+
+```{r, echo = F}
+tab <- dcast(comp, country + new_1yrrisk + new_2yrrisk~base, value.var = "rank")
+setcolorder(tab, c("country", "new_1yrrisk", "new_2yrrisk", base_years, as.character(as.integer(base_years)-1)))
+kable(tab, col.names = c("country", "1-year risk", "2-year risk", paste0(base_years, " 2-year risk ranking"),
+                         paste0(as.character(as.integer(base_years)-1), " 2-year risk ranking")), digits = 3)
+```
+
+## Plot rankings between years
+
+```{r, echo = F}
+ggplot(tab, aes(x = get(base_years), y = get(paste0(as.integer(base_years)-1)))) + 
+  geom_abline(intercept = 0, slope = 1) + 
+  geom_point() + labs(x = paste0(base_years, " 2-year risk ranking"),
+                      y = paste0(as.character(as.integer(base_years)-1), " 2-year risk ranking"))
+```
+
+
+
+
